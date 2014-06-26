@@ -1,20 +1,27 @@
 package dynrsrc
 
 import (
+	"errors"
+	"os"
+	
 	"io/ioutil"
 	"path/filepath"
 	
 	"github.com/howeyc/fsnotify"
 )
 
-var done = false
+var state = 0
 var watcher *fsnotify.Watcher
-var dynrsrcs = make(map[string]func([]byte))
+var dynfiles = make(map[string]func([]byte))
+var dyndirs = make(map[string]func([]byte))
 
 func Start(watchEH, readEH func(error)) (err error) {
+	if state != 0 { return }
+	
 	watcher, err = fsnotify.NewWatcher()
 	
 	if err == nil {
+		state = 1
 		go process(watchEH, readEH)
 	}
 	
@@ -22,16 +29,23 @@ func Start(watchEH, readEH func(error)) (err error) {
 }
 
 func process(watchEH, readEH func(error)) {
-	for done {
+	for state == 1 {
 		select {
 		case event := <-watcher.Event:
-			if handler, ok := dynrsrcs[event.Name]; ok {
+			if (!event.IsModify()) {
+				continue
+			}
+			
+			if handler, ok := dynfiles[event.Name]; ok {
 				file, err := ioutil.ReadFile(event.Name)
 				if err != nil {
 					readEH(err)
 					continue
 				}
 				handler(file)
+			}
+			if handler, ok := dyndirs[filepath.Dir(event.Name)]; ok {
+				handler(nil)
 			}
 			
 		case err := <-watcher.Error:
@@ -41,20 +55,37 @@ func process(watchEH, readEH func(error)) {
 }
 
 func CreateDynamicResource(filename string, handler func([]byte)) error {
-	dynrsrcs[filename] = handler
+	if state != 1 {
+		return errors.New("Dynrsrc not started")
+	}
+	
+	finfo, err := os.Stat(filename)
+	if err != nil { return err }
+	
+	err = watcher.Watch(filename)
+	if err != nil { return err }
+	
+	if finfo.IsDir() {
+		dyndirs[filename] = handler
+		handler(nil)
+		return nil
+	}
+	
+	dynfiles[filename] = handler
 	
 	file, err := ioutil.ReadFile(filename)
 	if err != nil { return err }
 	handler(file)
 	
-	return watcher.Watch(filepath.Dir(filename))
+	return nil
 }
 
 func DestroyDynamicResource(filename string) {
-	delete(dynrsrcs, filename)
+	delete(dynfiles, filename)
+	delete(dyndirs, filename)
 }
 
 func Stop() {
-	done = true
+	state = 2
 	watcher.Close()
 }
