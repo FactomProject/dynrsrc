@@ -7,7 +7,7 @@ import (
 	"io/ioutil"
 	"path/filepath"
 
-	"github.com/howeyc/fsnotify"
+	"github.com/FactomProject/fsnotify"
 )
 
 var state = 0
